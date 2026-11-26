@@ -1,0 +1,53 @@
+name: Scout
+on:
+  schedule:
+    # Werktags etwa alle 15 Minuten, Zeiten in UTC
+    - cron: "7,22,37,52 6-21 * * 1-5"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: scout
+  cancel-in-progress: false
+jobs:
+  lauf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+    env:
+      TZ: Europe/Berlin
+    steps:
+      - uses: actions/checkout@v7
+      - name: Letzten Stand holen
+        run: |
+          code=0
+          git ls-remote --exit-code --heads origin daten >/dev/null || code=$?
+          if [ "$code" = 0 ]; then
+            git fetch --depth 1 origin daten
+            git show FETCH_HEAD:zustand.enc > zustand.enc
+          elif [ "$code" != 2 ]; then
+            exit "$code"
+          fi
+      - name: Pruefen
+        id: pruefen
+        env:
+          PASSWORT: ${{ secrets.PASSWORT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 cloud.py
+      - name: Stand speichern
+        if: always() && steps.pruefen.outcome != 'skipped' && hashFiles('zustand.enc') != ''
+        run: |
+          blob=$(git hash-object -w zustand.enc)
+          baum=$(printf '100644 blob %s\tzustand.enc\n' "$blob" | git mktree)
+          export GIT_AUTHOR_NAME=scout GIT_AUTHOR_EMAIL=scout@users.noreply.github.com
+          export GIT_COMMITTER_NAME=scout GIT_COMMITTER_EMAIL=scout@users.noreply.github.com
+          neu=$(git commit-tree "$baum" -m "Stand")
+          git push --force origin "$neu:refs/heads/daten"
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - uses: actions/deploy-pages@v5

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Scout">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="symbol.png">
+<title>Aktien-Scout</title>
+<style>
+:root{--bg:#f4f4f1;--card:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;
+ --line:#2a78d6;--good:#0ca30c;--bad:#d03b3b;--neutral:#b9b7b0;--rand:rgba(11,11,11,.1)}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0d0d;--card:#1a1a19;--ink:#fff;--ink2:#c3c2b7;
+ --muted:#898781;--grid:#2c2c2a;--line:#3987e5;--neutral:#5c5b56;--rand:rgba(255,255,255,.1)}}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,sans-serif;
+ padding:env(safe-area-inset-top) 0 calc(76px + env(safe-area-inset-bottom))}
+main{max-width:640px;margin:auto;padding:16px}
+h1{font-size:22px}h2{font-size:13px;color:var(--ink2);margin:22px 0 8px;font-weight:600}
+.klein{font-size:12px;color:var(--muted)}
+.karte{background:var(--card);border:1px solid var(--rand);border-radius:14px;padding:14px;margin-bottom:10px}
+.kacheln{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.kacheln .karte{padding:10px;margin:0}.kacheln b{display:block;font-size:21px;font-weight:600}
+.zeile{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.werte{display:grid;grid-template-columns:repeat(3,1fr);margin:8px 0}.werte b{display:block;font-weight:600}
+.punkt{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+svg{width:100%;display:block;touch-action:pan-y}svg text{font-size:11px;fill:var(--ink2)}
+.balken{display:flex;gap:2px;height:14px;margin:10px 0 6px}.balken i{border-radius:3px;min-width:2px}
+.legende{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink2)}
+input{width:100%;padding:11px;border-radius:10px;border:1px solid var(--rand);background:var(--card);color:var(--ink);font-size:16px}
+details summary{list-style:none;cursor:pointer}details summary::-webkit-details-marker{display:none}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--rand);
+ padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;border:0;color:var(--muted);font:inherit;font-weight:600;padding:16px 0}
+nav button.an{color:var(--line)}
+.gross{margin-top:12px}.gross>*{display:block}.gross b{font-size:36px;font-weight:650;line-height:1.2}
+.kacheln.vier{grid-template-columns:1fr 1fr;margin:0}.werte.zwei{grid-template-columns:1fr 1fr}
+.rechts{text-align:right;white-space:nowrap}
+html{-webkit-text-size-adjust:100%}body{overflow-x:hidden;overflow-wrap:anywhere}
+nav button{min-height:52px;touch-action:manipulation}
+@media (max-width:350px){main{padding:10px}.werte{font-size:13px}.gross b{font-size:30px}}
+.knopf{width:100%;padding:13px;border:0;border-radius:10px;background:var(--line);color:#fff;font:600 16px system-ui}
+</style>
+</head>
+<body>
+<main><div class="zeile"><h1>Aktien-Scout</h1><span class="klein" id="zeit"></span></div><div id="inhalt">Lade …</div></main>
+<nav id="nav"></nav>
+<script>
+const SEITEN = ["Depot", "Ideen", "Markt", "Muster"];
+const CLOUD = false;
+let D, seite = "Depot", suche = "", offen = new Set();
+const el = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, z => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[z]));
+const zahl = (x, n = 2) => x.toLocaleString("de-DE", {minimumFractionDigits: n, maximumFractionDigits: n});
+const proz = (x, n = 1) => (x > 0 ? "+" : "") + zahl(x * 100, n) + " %";
+const tag = d => d.slice(8, 10) + "." + d.slice(5, 7) + ".";
+const faktor = w => w === "USD" ? D.stand.usd : 1;
+const STATUS = {wartet:"Wartet auf Kaufkurs", offen:"Gekauft, läuft", ziel:"Ziel erreicht", bremse:"Notbremse",
+  zeit:"Zeit abgelaufen", nicht_gekauft:"Nicht gekauft", abgebrochen:"Abgebrochen"};
+const punkt = f => `<span class="punkt" style="background:var(--${f})"></span>`;
+
+// Linie mit waagrechten Marken; Antippen zeigt Datum und Wert.
+function linie(reihe, marken = [], hoehe = 120, format = v => zahl(v) + " €") {
+  const B = 340, r = marken.length ? 92 : 6;
+  const alle = reihe.map(p => p[1]).concat(marken.map(m => m.v));
+  let lo = Math.min(...alle), hi = Math.max(...alle); const luft = (hi - lo || 1) * .08; lo -= luft; hi += luft;
+  const x = i => 2 + i * (B - r - 4) / Math.max(1, reihe.length - 1), y = v => hoehe - 4 - (v - lo) / (hi - lo) * (hoehe - 20);
+  let letzte = -99;
+  const m = [...marken].sort((a, b) => b.v - a.v).map(k => {
+    const ty = Math.max(y(k.v) + 4, letzte + 13); letzte = ty;
+    return `<line x1="0" x2="${B - r}" y1="${y(k.v)}" y2="${y(k.v)}" stroke="var(--${k.farbe})" stroke-dasharray="4 3"/>
+      <text x="${B - r + 5}" y="${ty}">${k.name} ${zahl(k.v)}</text>`}).join("");
+  const weg = reihe.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p[1]).toFixed(1)).join("");
+  const info = esc(JSON.stringify(reihe.map((p, i) => [x(i), y(p[1]), tag(p[0]) + "  " + format(p[1])])));
+  return `<svg viewBox="0 0 ${B} ${hoehe}" data-p="${info}">${m}
+    <path d="${weg}" fill="none" stroke="var(--line)" stroke-width="2" stroke-linejoin="round"/>
+    <circle r="4" fill="var(--line)" stroke="var(--card)" stroke-width="2" cx="${x(reihe.length-1)}" cy="${y(reihe.at(-1)[1])}"/>
+    <text class="tip" x="2" y="11"></text></svg>`;
+}
+function zeigen(e) {
+  const s = e.target.closest("svg[data-p]"); if (!s) return;
+  const box = s.getBoundingClientRect(), px = (e.clientX - box.left) / box.width * 340;
+  const p = JSON.parse(s.dataset.p).reduce((a, b) => Math.abs(b[0] - px) < Math.abs(a[0] - px) ? b : a);
+  s.querySelector(".tip").textContent = p[2];
+  const c = s.querySelector("circle"); c.setAttribute("cx", p[0]); c.setAttribute("cy", p[1]);
+}
+addEventListener("pointermove", zeigen); addEventListener("pointerdown", zeigen);
+
+function ideen() {
+  const l = D.journal.filter(i => !i.still && ["wartet", "offen"].includes(i.status)).reverse();
+  if (!l.length) return `<div class="karte" style="margin-top:12px"><b>Gerade keine laufende Idee.</b>
+    <p class="klein">Eine Idee erscheint nur, wenn ein Muster genug Vorteil hatte und gerade passt. Mehrere Tage ohne Idee sind normal.</p></div>`;
+  return l.map(i => {
+    const k = D.stand.kurse[i.symbol]; if (!k) return "";
+    const f = faktor(i.waehrung), jetzt = k.preis * f;
+    return `<h2>${esc(i.firma)} · ${STATUS[i.status]}</h2><div class="karte">
+      <div class="zeile"><span>Aktuell <b>${zahl(jetzt)} €</b></span><span class="klein">${proz(k.preis / i.kauf - 1)} zum Kaufkurs</span></div>
+      <div class="werte"><div><span class="klein">Kaufen max.</span><b>${zahl(i.kauf*f)} €</b></div>
+        <div><span class="klein">${punkt("good")}Verkaufen</span><b>${zahl(i.ziel*f)} €</b></div>
+        <div><span class="klein">${punkt("bad")}Notbremse</span><b>${zahl(i.bremse*f)} €</b></div></div>
+      ${linie(k.verlauf.slice(-45).map(p => [p[0], p[1]*f]), [{v:i.ziel*f,name:"Ziel",farbe:"good"},{v:i.kauf*f,name:"Kauf",farbe:"muted"},{v:i.bremse*f,name:"Brems",farbe:"bad"}], 150)}
+      <p class="klein">Idee vom ${tag(i.erstellt)} · Ziel-Chance ${zahl(i.chance*100,0)} % · max. ${i.dauer} Handelstage · ${esc(i.muster)}
+      ${i.waehrung === "USD" ? " · Euro-Werte schwanken mit dem Dollar" : ""}</p></div>`;
+  }).join("");
+}
+
+function depot() {
+  const st = D.stand, E = st.einsatz, echte = D.journal.filter(i => !i.still);
+  const fertig = echte.filter(i => "netto" in i).sort((a, b) => a.verkauft_am.localeCompare(b.verkauft_am));
+  const offene = echte.filter(i => i.status === "offen" && st.kurse[i.symbol]).map(i => {
+    const k = st.kurse[i.symbol];
+    return {...i, jetzt: k.preis, netto_jetzt: k.preis / i.kaufpreis - 1 - st.kosten}; });
+  const wartend = echte.filter(i => i.status === "wartet");
+  const real = fertig.reduce((s, i) => s + i.netto * E, 0), lauf = offene.reduce((s, i) => s + i.netto_jetzt * E, 0);
+  const wert = st.start + real + lauf, gebunden = (offene.length + wartend.length) * E;
+  const gewonnen = fertig.filter(i => i.netto > 0).length;
+  let s = st.start;
+  const verlauf = fertig.length ? [[fertig[0].gekauft_am, s], ...fertig.map(i => [i.verkauft_am, s += i.netto * E])] : [];
+  const geld = v => (v > 0 ? "+" : "") + zahl(v) + " €", farbe = v => punkt(v >= 0 ? "good" : "bad");
+  const trade = (i, netto, verkaufText, verkauf) => { const f = faktor(i.waehrung), stueck = E / (i.kaufpreis * f);
+    return `<div class="karte"><div class="zeile"><span><b>${esc(i.firma)}</b><br><span class="klein">${STATUS[i.status]}</span></span>
+      <span class="rechts"><b>${farbe(netto)}${geld(netto * E)}</b><br><span class="klein">${proz(netto)}</span></span></div>
+      <div class="werte zwei"><div><span class="klein">Gekauft ${tag(i.gekauft_am)}</span><b>${zahl(i.kaufpreis * f)} €</b></div>
+      <div><span class="klein">${verkaufText}</span><b>${zahl(verkauf * f)} €</b></div></div>
+      <p class="klein">${zahl(stueck, 3)} Stück · ${zahl(E, 0)} € Einsatz · ${zahl(2 * st.gebuehr)} € Gebühren eingerechnet</p></div>`; };
+  return `<div class="karte gross"><span class="klein">Virtuelles Konto (Spielgeld)</span><b>${zahl(wert)} €</b>
+      <span>${farbe(wert - st.start)}${geld(wert - st.start)} (${proz(wert / st.start - 1, 2)}) seit Start mit ${zahl(st.start, 0)} €</span></div>
+    <div class="kacheln vier">
+      <div class="karte"><span class="klein">Abgeschlossen</span><b>${geld(real)}</b></div>
+      <div class="karte"><span class="klein">Noch offen</span><b>${geld(lauf)}</b></div>
+      <div class="karte"><span class="klein">Gewinn-Trades</span><b>${fertig.length ? gewonnen + " von " + fertig.length : "–"}</b></div>
+      <div class="karte"><span class="klein">Frei verfügbar</span><b>${zahl(st.start + real - gebunden, 0)} €</b></div></div>
+    <h2>Kontostand nach abgeschlossenen Trades</h2><div class="karte">
+    ${verlauf.length > 1 ? linie(verlauf, [{v: st.start, name: "Start", farbe: "muted"}], 170) : '<p class="klein">Die Kurve erscheint nach dem ersten abgeschlossenen Trade.</p>'}</div>
+    <h2>Offene Trades (${offene.length})</h2>${offene.map(i => trade(i, i.netto_jetzt, "Aktuell", i.jetzt)).join("") || '<div class="karte klein">Gerade keine.</div>'}
+    ${wartend.length ? `<p class="klein">${wartend.length} Kauforder wartet noch, siehe Reiter Ideen.</p>` : ""}
+    <h2>Abgeschlossene Trades (${fertig.length})</h2>${[...fertig].reverse().map(i => trade(i, i.netto, "Verkauft " + tag(i.verkauft_am), i.verkauf)).join("") || '<div class="karte klein">Noch keine.</div>'}
+    <p class="klein">Alles virtuell, es wird nichts echt gekauft. Vor Steuer; Dollar-Schwankungen bei US-Aktien sind im Ergebnis nicht berücksichtigt.</p>`;
+}
+
+function markt() {
+  return `<h2>Antippen zeigt den Verlauf (90 Tage)</h2><input id="suche" placeholder="Aktie suchen" value="${esc(suche)}"><div id="liste" style="margin-top:10px">${liste()}</div>`;
+}
+function liste() {
+  return Object.entries(D.stand.kurse).map(([s, k]) => {
+    const v = k.verlauf, heute = k.preis / v.at(-1)[1] - 1;
+    // Ist die letzte Kerze schon der heutige Stand, mit dem Vortag vergleichen.
+    const a = Math.abs(heute) < 1e-4 ? k.preis / v.at(-2)[1] - 1 : heute;
+    return {s, k, a};
+  }).filter(o => o.k.name.toLowerCase().includes(suche.toLowerCase())).sort((a, b) => b.a - a.a)
+  .map(({s, k, a}) => `<details class="karte" data-s="${s}" ${offen.has(s) ? "open" : ""}><summary class="zeile"><b>${esc(k.name)}</b>
+    <span>${zahl(k.preis * faktor(k.waehrung))} € &nbsp;${punkt(a >= 0 ? "good" : "bad")}${proz(a)}</span></summary>
+    ${linie(k.verlauf.map(p => [p[0], p[1] * faktor(k.waehrung)]))}</details>`).join("");
+}
+
+function muster() {
+  if (!D.modell) return "";
+  return `<h2>Wie oft die Muster seit ${tag(D.modell.trennung)}${D.modell.trennung.slice(0,4)} funktionierten</h2>` +
+  Object.entries(D.modell.muster).map(([name, m]) => { const n = m.neu, l = D.lernen[name];
+    return `<div class="karte"><b>${esc(name)}</b><br><span class="klein">${l.pausiert ? "Pausiert nach eigenen Verlusten" : m.brauchbar ? "Wird gemeldet" : "Zu schwach, wird nicht gemeldet"}</span>
+    <div class="balken"><i style="flex:${n.ziel};background:var(--good)"></i><i style="flex:${n.zeit};background:var(--neutral)"></i><i style="flex:${n.bremse};background:var(--bad)"></i></div>
+    <div class="legende"><span>${punkt("good")}Ziel ${zahl(n.ziel*100,0)} %</span><span>${punkt("neutral")}Zeit abgelaufen ${zahl(n.zeit*100,0)} %</span><span>${punkt("bad")}Notbremse ${zahl(n.bremse*100,0)} %</span></div>
+    <p class="klein" style="margin-top:8px">${n.n} Fälle · Schnitt nach Gebühren ${proz(n.schnitt,2)} (Zufallskauf ${proz(m.immer.schnitt,2)}) · bis ${m.plan[2]} Handelstage<br>
+    Eigene Ergebnisse: ${l.n ? `${l.n}, Schnitt ${proz(l.schnitt,2)}` : "noch keine"}</p></div>`}).join("");
+}
+
+function malen() {
+  el("nav").innerHTML = SEITEN.map(s => `<button class="${s === seite ? "an" : ""}" data-seite="${s}">${s}</button>`).join("");
+  if (!D) return;
+  if (!D.stand) { el("inhalt").textContent = "Noch keine Daten. Der erste Durchlauf läuft in den nächsten 15 Minuten."; return; }
+  el("zeit").textContent = "Stand " + tag(D.stand.zeit) + " " + D.stand.zeit.slice(11, 16);
+  el("inhalt").innerHTML = ({Depot: depot, Ideen: ideen, Markt: markt, Muster: muster})[seite]();
+}
+el("nav").onclick = e => { const s = e.target.dataset.seite; if (s) { seite = s; malen(); scrollTo(0, 0); } };
+addEventListener("input", e => { if (e.target.id === "suche") { suche = e.target.value; el("liste").innerHTML = liste(); } });
+addEventListener("toggle", e => { const s = e.target.dataset.s; if (s) e.target.open ? offen.add(s) : offen.delete(s); }, true);
+// Cloud: Die Datei ist verschlüsselt (openssl-Format) und wird erst hier im Handy geöffnet.
+async function oeffnen(bytes, passwort) {
+  const basis = await crypto.subtle.importKey("raw", new TextEncoder().encode(passwort), "PBKDF2", false, ["deriveBits"]);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits(
+    {name: "PBKDF2", hash: "SHA-256", salt: bytes.slice(8, 16), iterations: 200000}, basis, 384));
+  const key = await crypto.subtle.importKey("raw", bits.slice(0, 32), "AES-CBC", false, ["decrypt"]);
+  const klar = await crypto.subtle.decrypt({name: "AES-CBC", iv: bits.slice(32)}, key, bytes.slice(16));
+  return JSON.parse(new TextDecoder().decode(klar));
+}
+function anmelden(hinweis = "") {
+  D = null; el("nav").style.display = "none";
+  el("inhalt").innerHTML = `<form id="login" class="karte" style="margin-top:16px"><b>Passwort eingeben</b>
+    <p class="klein">${hinweis || "Nur einmal nötig, dein Handy merkt es sich."}</p>
+    <input name="username" autocomplete="username" value="scout" hidden>
+    <input type="password" id="pw" autocomplete="current-password" style="margin:10px 0" required>
+    <button class="knopf">Öffnen</button></form>`;
+}
+addEventListener("submit", e => { e.preventDefault();
+  localStorage.setItem("pw", el("pw").value.trim()); el("inhalt").textContent = "Öffne …"; holen(); });
+async function holen() {
+  if (CLOUD && !localStorage.getItem("pw")) { if (!el("login")) anmelden(); return; }
+  let neu;
+  try {
+    const antwort = await fetch(CLOUD ? "daten.enc?t=" + Date.now() : "daten", {cache: "no-store"});
+    if (!antwort.ok) throw 0;
+    neu = CLOUD ? new Uint8Array(await antwort.arrayBuffer()) : await antwort.json();
+  } catch { el("zeit").textContent = "Keine Verbindung"; return; }
+  if (CLOUD) {
+    try { neu = await oeffnen(neu, localStorage.getItem("pw")); }
+    catch { localStorage.removeItem("pw"); anmelden("Das Passwort stimmt nicht."); return; }
+  }
+  D = neu; el("nav").style.display = "";
+  if (document.activeElement?.id !== "suche") malen();
+}
+malen(); holen(); setInterval(holen, 60000);
+addEventListener("visibilitychange", () => document.hidden || holen());
+</script>
+</body>
+</html>

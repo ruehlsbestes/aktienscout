@@ -1,0 +1,7 @@
+ablage/
+werkzeug/
+site/
+__pycache__/
+*.command
+*.enc
+.DS_Store
