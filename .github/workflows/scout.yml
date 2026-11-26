@@ -43,6 +43,7 @@ jobs:
           fi
       - name: Pruefen
         id: pruefen
+        continue-on-error: true
         env:
           PASSWORT: ${{ secrets.PASSWORT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
@@ -57,7 +58,38 @@ jobs:
           neu=$(git commit-tree "$baum" -m "Stand")
           git push --force origin "$neu:refs/heads/daten"
       - uses: actions/configure-pages@v6
+        if: steps.pruefen.outcome == 'success'
+        continue-on-error: true
       - uses: actions/upload-pages-artifact@v5
+        id: hochladen
+        if: steps.pruefen.outcome == 'success'
+        continue-on-error: true
         with:
           path: site
-      - uses: actions/deploy-pages@v5
+      - name: Veroeffentlichen
+        id: versuch1
+        if: steps.hochladen.outcome == 'success'
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+      - name: Kurz warten
+        if: steps.versuch1.outcome == 'failure'
+        run: sleep 60
+      - name: Veroeffentlichen, zweiter Versuch
+        id: versuch2
+        if: steps.versuch1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+      # Fehler-Mail nur, wenn schon lange nichts mehr geklappt hat.
+      # 12 Stunden, weil nachts ohnehin eine Pause von gut 7 Stunden ist.
+      - name: Fehler nur bei langem Ausfall melden
+        if: steps.versuch1.outcome != 'success' && steps.versuch2.outcome != 'success'
+        run: |
+          python3 - <<'ENDE'
+          import sys, time, urllib.request
+          from email.utils import parsedate_to_datetime
+          url = "https://ruehlsbestes.github.io/aktienscout/daten.enc?t=%d" % time.time()
+          with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=30) as a:
+              stunden = (time.time() - parsedate_to_datetime(a.headers["Last-Modified"]).timestamp()) / 3600
+          print(f"Letzter erfolgreicher Stand vor {stunden:.1f} Stunden")
+          sys.exit(1 if stunden > 12 else 0)
+          ENDE
