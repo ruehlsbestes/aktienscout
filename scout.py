@@ -5,11 +5,13 @@
   python3 scout.py bilanz   zeigen, wie die bisherigen Ideen ausgingen
   python3 scout.py test     Testnachricht aufs Handy
 """
+import hashlib
 import json
 import os
 import secrets
 import sys
 import urllib.request
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -90,14 +92,15 @@ def zahl(x, stellen=2):
 def ideen_suchen(alle, m, journal):
     heute = date.today().isoformat()
     frei = config.MAX_IDEEN_PRO_TAG - sum(i["erstellt"] == heute and not i.get("still") for i in journal)
-    laufend = {i["symbol"] for i in journal if i["status"] in ("wartet", "offen")}
+    laufend = {(i["symbol"], bool(i.get("test"))) for i in journal if i["status"] in ("wartet", "offen")}
+    tests_heute = Counter(i["muster"] for i in journal if i.get("test") and i["erstellt"] == heute)
     belegt = sum(i["status"] in ("wartet", "offen") and not i.get("still") for i in journal)
     konto = config.STARTKAPITAL + sum(i["netto"] * config.EINSATZ_EURO
                                       for i in journal if "netto" in i and not i.get("still"))
     frei = min(frei, int(konto // config.EINSATZ_EURO) - belegt)
     kandidaten = []
     for symbol, (tage, preis, waehrung) in alle.items():
-        if symbol in laufend or len(tage) < 260:
+        if len(tage) < 260:
             continue
         # Kerze zu alt (z. B. Datenfehler)? Dann nichts vorschlagen.
         if (date.today() - date.fromisoformat(tage[-1]["d"])).days > 4:
@@ -105,21 +108,25 @@ def ideen_suchen(alle, m, journal):
         werte = strategie.merkmale(tage)[-1]
         for name, info in m["muster"].items():
             regel = strategie.regel(name, symbol)
-            if regel and info["brauchbar"] and regel(werte):
+            if regel and regel(werte):
                 z, b, dauer = info["plan"]
                 ziel, bremse = werte["c"] + z * werte["atr"], werte["c"] - b * werte["atr"]
                 # Kurs schon weggelaufen oder unter der Notbremse: Idee veraltet.
                 if not bremse < preis < werte["c"] + 0.5 * (ziel - werte["c"]):
                     continue
-                kandidaten.append((info["neu"]["schnitt"], symbol, name, info, werte["c"], ziel,
+                # Echte Ideen: bestes Muster zuerst. Gleichstand: zufällig statt nach Alphabet.
+                los = hashlib.sha256(f"{heute}{symbol}".encode()).hexdigest()
+                kandidaten.append((info["neu"]["schnitt"], los, symbol, name, info, werte["c"], ziel,
                                    bremse, dauer, tage[-1]["d"], waehrung))
     kandidaten.sort(reverse=True)
 
     usd = daten.dollar_in_euro() if kandidaten else 1.0
     gewaehlt = set()
-    for _, symbol, name, info, kauf, ziel, bremse, dauer, signaltag, waehrung in kandidaten:
-        still = lernen.pausiert(journal, name)
-        if (frei <= 0 and not still) or symbol in gewaehlt:
+    for _, _, symbol, name, info, kauf, ziel, bremse, dauer, signaltag, waehrung in kandidaten:
+        # Schwache oder pausierte Muster laufen nur im Test-Depot, ohne Meldung.
+        test = still = not info["brauchbar"] or lernen.pausiert(journal, name)
+        voll = tests_heute[name] >= config.TEST_JE_MUSTER_PRO_TAG if test else frei <= 0
+        if voll or (symbol, test) in laufend | gewaehlt:
             continue
         firma = config.AKTIEN[symbol]
         try:
@@ -161,11 +168,15 @@ def ideen_suchen(alle, m, journal):
         journal.append({"symbol": symbol, "firma": firma, "muster": name, "erstellt": heute,
                         "signaltag": signaltag, "kauf": kauf, "ziel": ziel, "bremse": bremse,
                         "dauer": dauer, "waehrung": waehrung, "status": "wartet",
-                        "chance": chance, "still": still, "kosten": strategie.kosten(symbol),
+                        "chance": chance, "still": still, "test": test, "kosten": strategie.kosten(symbol),
                         "news_gut": len(gut), "news_schlecht": len(schlecht)})
-        gewaehlt.add(symbol)
-        frei -= 0 if still else 1
-    if not gewaehlt:
+        gewaehlt.add((symbol, test))
+        if test:
+            tests_heute[name] += 1
+        else:
+            frei -= 1
+    print(f"Neue Test-Trades: {sum(t for _, t in gewaehlt)}")
+    if all(t for _, t in gewaehlt):
         print("Keine neue Idee: kein Muster mit genug Vorteil passt gerade.")
 
 

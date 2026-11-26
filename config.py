@@ -11,6 +11,7 @@ MIN_FAELLE = 200            # so viele alte Fälle braucht eine Wahrscheinlichke
 MIN_GEWINN_PROZENT = 0.30   # erwarteter Schnitt nach Gebühren, sonst keine Meldung
 MIN_VORSPRUNG_PROZENT = 0.20  # so viel besser als "irgendwann kaufen"
 MAX_IDEEN_PRO_TAG = 3
+TEST_JE_MUSTER_PRO_TAG = 1  # Test-Depot: neue Test-Trades je Muster und Tag (ohne Handy-Meldung)
 STARTKAPITAL = 5000.0       # virtuelles Konto im Dashboard
 MIN_EIGENE_FAELLE = 15      # ab so vielen eigenen Ergebnissen darf ein Muster pausieren
 

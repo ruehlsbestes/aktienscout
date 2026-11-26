@@ -53,7 +53,7 @@ a.news{display:block;color:inherit;text-decoration:none}
 <script>
 const SEITEN = ["Depot", "Ideen", "News", "Markt", "Muster"];
 const CLOUD = false;
-let D, seite = "Depot", art = "Alle", filter = "Alle", suche = "", offen = new Set();
+let D, seite = "Depot", art = "Alle", konto = "Mein Depot", filter = "Alle", suche = "", offen = new Set();
 const el = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, z => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[z]));
 const zahl = (x, n = 2) => x.toLocaleString("de-DE", {minimumFractionDigits: n, maximumFractionDigits: n});
@@ -112,7 +112,8 @@ function ideen() {
 }
 
 function depot() {
-  const st = D.stand, E = st.einsatz, echte = D.journal.filter(i => !i.still);
+  const test = konto === "Test-Depot";
+  const st = D.stand, E = st.einsatz, echte = D.journal.filter(i => test ? i.test : !i.still);
   const fertig = echte.filter(i => "netto" in i).sort((a, b) => a.verkauft_am.localeCompare(b.verkauft_am));
   const offene = echte.filter(i => i.status === "offen" && st.kurse[i.symbol]).map(i => {
     const k = st.kurse[i.symbol];
@@ -130,18 +131,28 @@ function depot() {
       <div class="werte zwei"><div><span class="klein">Gekauft ${tag(i.gekauft_am)}</span><b>${kurs(i.kaufpreis * f)} €</b></div>
       <div><span class="klein">${verkaufText}</span><b>${kurs(verkauf * f)} €</b></div></div>
       <p class="klein">${zahl(stueck, 3)} Stück · ${zahl(E, 0)} € Einsatz · ${zahl(2 * st.gebuehr)} € Gebühren eingerechnet</p></div>`; };
-  return `<div class="karte gross"><span class="klein">Virtuelles Konto (Spielgeld)</span><b>${zahl(wert)} €</b>
-      <span>${farbe(wert - st.start)}${geld(wert - st.start)} (${proz(wert / st.start - 1, 2)}) seit Start mit ${zahl(st.start, 0)} €</span></div>
+  const gruppen = {}; fertig.forEach(i => (gruppen[i.muster] ??= []).push(i.netto));
+  const jeMuster = Object.entries(gruppen).map(([n, l]) => { const s = l.reduce((a, b) => a + b, 0);
+    return `<div class="karte"><div class="zeile"><b>${esc(n)}</b><b class="rechts">${farbe(s)}${geld(s * E)}</b></div>
+      <span class="klein">${l.length} fertig · ${l.filter(x => x > 0).length} im Plus · Schnitt ${proz(s / l.length, 2)}</span></div>`; }).join("");
+  const kopf = test ? `<div class="karte gross"><span class="klein">Test-Depot: Summe aller Test-Trades</span><b>${geld(real + lauf)}</b>
+      <span class="klein">Hier probiert der Scout auch schwache Muster aus. Keine Kaufempfehlung.</span></div>`
+    : `<div class="karte gross"><span class="klein">Virtuelles Konto (Spielgeld)</span><b>${zahl(wert)} €</b>
+      <span>${farbe(wert - st.start)}${geld(wert - st.start)} (${proz(wert / st.start - 1, 2)}) seit Start mit ${zahl(st.start, 0)} €</span></div>`;
+  const mehr = (liste, f) => liste.slice(0, 30).map(f).join("") + (liste.length > 30 ? `<p class="klein">Die neuesten 30 von ${liste.length}.</p>` : "");
+  return `${chips(["Mein Depot", "Test-Depot"], konto, "konto")}${kopf}
     <div class="kacheln vier">
       <div class="karte"><span class="klein">Abgeschlossen</span><b>${geld(real)}</b></div>
       <div class="karte"><span class="klein">Noch offen</span><b>${geld(lauf)}</b></div>
       <div class="karte"><span class="klein">Gewinn-Trades</span><b>${fertig.length ? gewonnen + " von " + fertig.length : "–"}</b></div>
-      <div class="karte"><span class="klein">Frei verfügbar</span><b>${zahl(st.start + real - gebunden, 0)} €</b></div></div>
-    <h2>Kontostand nach abgeschlossenen Trades</h2><div class="karte">
-    ${verlauf.length > 1 ? linie(verlauf, [{v: st.start, name: "Start", farbe: "muted"}], 170) : '<p class="klein">Die Kurve erscheint nach dem ersten abgeschlossenen Trade.</p>'}</div>
-    <h2>Offene Trades (${offene.length})</h2>${offene.map(i => trade(i, i.netto_jetzt, "Aktuell", i.jetzt)).join("") || '<div class="karte klein">Gerade keine.</div>'}
-    ${wartend.length ? `<p class="klein">${wartend.length} Kauforder wartet noch, siehe Reiter Ideen.</p>` : ""}
-    <h2>Abgeschlossene Trades (${fertig.length})</h2>${[...fertig].reverse().map(i => trade(i, i.netto, "Verkauft " + tag(i.verkauft_am), i.verkauf)).join("") || '<div class="karte klein">Noch keine.</div>'}
+      <div class="karte">${test ? `<span class="klein">Offen / wartend</span><b>${offene.length} / ${wartend.length}</b>`
+        : `<span class="klein">Frei verfügbar</span><b>${zahl(st.start + real - gebunden, 0)} €</b>`}</div></div>
+    ${test ? `<h2>Ergebnis je Muster</h2>${jeMuster || '<div class="karte klein">Erscheint, sobald Test-Trades abgeschlossen sind. Das dauert einige Tage.</div>'}`
+      : `<h2>Kontostand nach abgeschlossenen Trades</h2><div class="karte">
+    ${verlauf.length > 1 ? linie(verlauf, [{v: st.start, name: "Start", farbe: "muted"}], 170) : '<p class="klein">Die Kurve erscheint nach dem ersten abgeschlossenen Trade.</p>'}</div>`}
+    <h2>Offene Trades (${offene.length})</h2>${mehr([...offene].reverse(), i => trade(i, i.netto_jetzt, "Aktuell", i.jetzt)) || '<div class="karte klein">Gerade keine.</div>'}
+    ${wartend.length ? `<p class="klein">Wartet auf Kaufkurs: ${wartend.slice(-12).map(i => esc(i.firma)).join(", ")}${wartend.length > 12 ? " …" : ""}</p>` : ""}
+    <h2>Abgeschlossene Trades (${fertig.length})</h2>${mehr([...fertig].reverse(), i => trade(i, i.netto, "Verkauft " + tag(i.verkauft_am), i.verkauf)) || '<div class="karte klein">Noch keine.</div>'}
     <p class="klein">Alles virtuell, es wird nichts echt gekauft. Vor Steuer; Dollar-Schwankungen bei US-Aktien sind im Ergebnis nicht berücksichtigt.</p>`;
 }
 
@@ -175,7 +186,7 @@ function muster() {
   if (!D.modell) return "";
   return `<h2>Wie oft die Muster seit ${tag(D.modell.trennung)}${D.modell.trennung.slice(0,4)} funktionierten</h2>` +
   Object.entries(D.modell.muster).map(([name, m]) => { const n = m.neu, l = D.lernen[name];
-    return `<div class="karte"><b>${esc(name)}</b><br><span class="klein">${l.pausiert ? "Pausiert nach eigenen Verlusten" : m.brauchbar ? "Wird gemeldet" : "Zu schwach, wird nicht gemeldet"}</span>
+    return `<div class="karte"><b>${esc(name)}</b><br><span class="klein">${l.pausiert ? "Pausiert nach eigenen Verlusten: läuft nur im Test-Depot" : m.brauchbar ? "Wird gemeldet" : "Zu schwach: läuft nur im Test-Depot"}</span>
     <div class="balken"><i style="flex:${n.ziel};background:var(--good)"></i><i style="flex:${n.zeit};background:var(--neutral)"></i><i style="flex:${n.bremse};background:var(--bad)"></i></div>
     <div class="legende"><span>${punkt("good")}Ziel ${zahl(n.ziel*100,0)} %</span><span>${punkt("neutral")}Zeit abgelaufen ${zahl(n.zeit*100,0)} %</span><span>${punkt("bad")}Notbremse ${zahl(n.bremse*100,0)} %</span></div>
     <p class="klein" style="margin-top:8px">${n.n} Fälle · Schnitt nach Gebühren ${proz(n.schnitt,2)} (Zufallskauf ${proz(m.immer.schnitt,2)}) · bis ${m.plan[2]} Handelstage<br>
@@ -190,7 +201,7 @@ function malen() {
   el("inhalt").innerHTML = ({Depot: depot, Ideen: ideen, News: nachrichten, Markt: markt, Muster: muster})[seite]();
 }
 el("inhalt").addEventListener("click", e => { const d = e.target.dataset;
-  if (d.art) { art = d.art; malen(); } if (d.filter) { filter = d.filter; malen(); } });
+  if (d.konto) { konto = d.konto; malen(); } if (d.art) { art = d.art; malen(); } if (d.filter) { filter = d.filter; malen(); } });
 el("nav").onclick = e => { const s = e.target.dataset.seite; if (s) { seite = s; malen(); scrollTo(0, 0); } };
 addEventListener("input", e => { if (e.target.id === "suche") { suche = e.target.value; el("liste").innerHTML = liste(); } });
 addEventListener("toggle", e => { const s = e.target.dataset.s; if (!s) return; e.target.open ? offen.add(s) : offen.delete(s);

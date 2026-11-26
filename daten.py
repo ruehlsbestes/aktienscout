@@ -1,4 +1,5 @@
 """Kurse und Nachrichten aus kostenlosen Quellen (nur Standardbibliothek)."""
+import functools
 import json
 import time
 import urllib.parse
@@ -47,6 +48,7 @@ def kurse(symbol, zeitraum="10y"):
     return tage, meta.get("regularMarketPrice"), meta.get("currency", "EUR")
 
 
+@functools.lru_cache(maxsize=1)  # nur einmal je Durchlauf abfragen
 def dollar_in_euro():
     _, preis, _ = kurse("EURUSD=X", "5d")
     return 1.0 / preis
