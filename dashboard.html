@@ -131,6 +131,13 @@ function depot() {
       <div class="werte zwei"><div><span class="klein">Gekauft ${tag(i.gekauft_am)}</span><b>${kurs(i.kaufpreis * f)} €</b></div>
       <div><span class="klein">${verkaufText}</span><b>${kurs(verkauf * f)} €</b></div></div>
       <p class="klein">${zahl(stueck, 3)} Stück · ${zahl(E, 0)} € Einsatz · ${zahl(2 * st.gebuehr)} € Gebühren eingerechnet</p></div>`; };
+  const geplant = i => { const f = faktor(i.waehrung), k = st.kurse[i.symbol];
+    return `<div class="karte"><div class="zeile"><span><b>${esc(i.firma)}</b><br><span class="klein">${STATUS[i.status]}</span></span>
+      <span class="rechts"><b>${k ? kurs(k.preis * f) + " €" : "–"}</b><br><span class="klein">aktuell</span></span></div>
+      <div class="werte"><div><span class="klein">Kaufen max.</span><b>${kurs(i.kauf * f)} €</b></div>
+        <div><span class="klein">${punkt("good")}Verkaufen</span><b>${kurs(i.ziel * f)} €</b></div>
+        <div><span class="klein">${punkt("bad")}Notbremse</span><b>${kurs(i.bremse * f)} €</b></div></div>
+      <p class="klein">Geplant am ${tag(i.erstellt)} · max. ${i.dauer} Handelstage · ${esc(i.muster)}</p></div>`; };
   const gruppen = {}; fertig.forEach(i => (gruppen[i.muster] ??= []).push(i.netto));
   const jeMuster = Object.entries(gruppen).map(([n, l]) => { const s = l.reduce((a, b) => a + b, 0);
     return `<div class="karte"><div class="zeile"><b>${esc(n)}</b><b class="rechts">${farbe(s)}${geld(s * E)}</b></div>
@@ -150,8 +157,8 @@ function depot() {
     ${test ? `<h2>Ergebnis je Muster</h2>${jeMuster || '<div class="karte klein">Erscheint, sobald Test-Trades abgeschlossen sind. Das dauert einige Tage.</div>'}`
       : `<h2>Kontostand nach abgeschlossenen Trades</h2><div class="karte">
     ${verlauf.length > 1 ? linie(verlauf, [{v: st.start, name: "Start", farbe: "muted"}], 170) : '<p class="klein">Die Kurve erscheint nach dem ersten abgeschlossenen Trade.</p>'}</div>`}
+    <h2>Geplante Trades (${wartend.length})</h2>${mehr([...wartend].reverse(), geplant) || '<div class="karte klein">Gerade keine.</div>'}
     <h2>Offene Trades (${offene.length})</h2>${mehr([...offene].reverse(), i => trade(i, i.netto_jetzt, "Aktuell", i.jetzt)) || '<div class="karte klein">Gerade keine.</div>'}
-    ${wartend.length ? `<p class="klein">Wartet auf Kaufkurs: ${wartend.slice(-12).map(i => esc(i.firma)).join(", ")}${wartend.length > 12 ? " …" : ""}</p>` : ""}
     <h2>Abgeschlossene Trades (${fertig.length})</h2>${mehr([...fertig].reverse(), i => trade(i, i.netto, "Verkauft " + tag(i.verkauft_am), i.verkauf)) || '<div class="karte klein">Noch keine.</div>'}
     <p class="klein">Alles virtuell, es wird nichts echt gekauft. Vor Steuer; Dollar-Schwankungen bei US-Aktien sind im Ergebnis nicht berücksichtigt.</p>`;
 }
