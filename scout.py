@@ -11,7 +11,7 @@ import secrets
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import config
@@ -67,11 +67,16 @@ def alle_kurse_holen():
 def modell(alle):
     """Wahrscheinlichkeiten einmal am Tag neu berechnen."""
     m = laden("modell.json", None)
-    if not m or m.get("stand") != date.today().isoformat():
+    if not m or m.get("stand") != date.today().isoformat() or m.get("anzahl") != len(config.AKTIEN):
         m = strategie.lernen({s: k[0] for s, k in alle.items()})
         m["stand"] = date.today().isoformat()
+        m["anzahl"] = len(config.AKTIEN)
         speichern("modell.json", m)
     return m
+
+
+def preis_text(x):
+    return zahl(x, 4 if 0 < abs(x) < 10 else 2)  # günstige Kryptowährungen genauer
 
 
 def euro(wert, waehrung, kurs):
@@ -99,7 +104,8 @@ def ideen_suchen(alle, m, journal):
             continue
         werte = strategie.merkmale(tage)[-1]
         for name, info in m["muster"].items():
-            if info["brauchbar"] and strategie.MUSTER[name](werte):
+            regel = strategie.regel(name, symbol)
+            if regel and info["brauchbar"] and regel(werte):
                 z, b, dauer = info["plan"]
                 ziel, bremse = werte["c"] + z * werte["atr"], werte["c"] - b * werte["atr"]
                 # Kurs schon weggelaufen oder unter der Notbremse: Idee veraltet.
@@ -130,12 +136,12 @@ def ideen_suchen(alle, m, journal):
         chance = lernen.angepasste_chance(n["ziel"], journal, name)
         eigen = lernen.eigene_bilanz(journal, name)
         k, zk, bk = (euro(x, waehrung, usd) for x in (kauf, ziel, bremse))
-        gewinn = config.EINSATZ_EURO * (ziel / kauf - 1 - strategie.KOSTEN)
-        verlust = config.EINSATZ_EURO * (bremse / kauf - 1 - strategie.KOSTEN)
+        gewinn = config.EINSATZ_EURO * (ziel / kauf - 1 - strategie.kosten(symbol))
+        verlust = config.EINSATZ_EURO * (bremse / kauf - 1 - strategie.kosten(symbol))
         text = (
-            f"Kaufen: max. {zahl(k)} € (Limit-Order, nur nächster Handelstag)\n"
-            f"Verkaufen: {zahl(zk)} € (+{zahl((ziel / kauf - 1) * 100, 1)} %)\n"
-            f"Notbremse: {zahl(bk)} € ({zahl((bremse / kauf - 1) * 100, 1)} %)\n"
+            f"Kaufen: max. {preis_text(k)} € (Limit-Order, nur nächster Handelstag)\n"
+            f"Verkaufen: {preis_text(zk)} € (+{zahl((ziel / kauf - 1) * 100, 1)} %)\n"
+            f"Notbremse: {preis_text(bk)} € ({zahl((bremse / kauf - 1) * 100, 1)} %)\n"
             f"Spätestens verkaufen nach {dauer} Handelstagen\n\n"
             f"In {n['n']} ähnlichen Fällen:\n"
             f"Ziel erreicht {n['ziel']:.0%} | Notbremse {n['bremse']:.0%} | Zeit abgelaufen {n['zeit']:.0%}\n"
@@ -155,7 +161,7 @@ def ideen_suchen(alle, m, journal):
         journal.append({"symbol": symbol, "firma": firma, "muster": name, "erstellt": heute,
                         "signaltag": signaltag, "kauf": kauf, "ziel": ziel, "bremse": bremse,
                         "dauer": dauer, "waehrung": waehrung, "status": "wartet",
-                        "chance": chance, "still": still,
+                        "chance": chance, "still": still, "kosten": strategie.kosten(symbol),
                         "news_gut": len(gut), "news_schlecht": len(schlecht)})
         gewaehlt.add(symbol)
         frei -= 0 if still else 1
@@ -177,7 +183,8 @@ def ideen_pruefen(alle, journal):
             idee["status"] = "abgebrochen"
             melden(f"{idee['firma']}: bitte selbst prüfen", "Alte Kurse wurden angepasst (z. B. Split).")
             continue
-        e = strategie.nachspielen(folge, idee["kauf"], idee["ziel"], idee["bremse"], idee["dauer"])
+        e = strategie.nachspielen(folge, idee["kauf"], idee["ziel"], idee["bremse"], idee["dauer"],
+                                  idee.get("kosten", strategie.KOSTEN))
         usd = daten.dollar_in_euro() if waehrung == "USD" else 1.0
         # Während des Handels: sofort warnen, wenn Ziel oder Notbremse erreicht sind.
         if e["status"] == "offen" and preis:
@@ -185,7 +192,7 @@ def ideen_pruefen(alle, journal):
             if marke and idee.get("gewarnt") != marke:
                 wort = "Zielkurs erreicht" if marke == "ziel" else "Notbremse erreicht"
                 melden(f"{idee['firma']}: {wort}",
-                       f"Aktuell etwa {zahl(euro(preis, waehrung, usd))} €. Falls gekauft: jetzt verkaufen prüfen.", True)
+                       f"Aktuell etwa {preis_text(euro(preis, waehrung, usd))} €. Falls gekauft: jetzt verkaufen prüfen.", True)
                 idee["gewarnt"] = marke
         if "kaufpreis" in e:
             idee.update(kaufpreis=e["kaufpreis"], gekauft_am=folge[0]["d"])
@@ -198,8 +205,8 @@ def ideen_pruefen(alle, journal):
             melden(f"{idee['firma']}: Kaufkurs nicht erreicht", "Order streichen. Idee ist erledigt.")
         elif e["status"] == "offen":
             melden(f"{idee['firma']}: Kaufkurs erreicht",
-                   f"Verkaufsorder bei {zahl(euro(idee['ziel'], waehrung, usd))} €, "
-                   f"Notbremse bei {zahl(euro(idee['bremse'], waehrung, usd))} €.")
+                   f"Verkaufsorder bei {preis_text(euro(idee['ziel'], waehrung, usd))} €, "
+                   f"Notbremse bei {preis_text(euro(idee['bremse'], waehrung, usd))} €.")
         else:
             idee["netto"] = e["netto"]
             wort = {"ziel": "Ziel erreicht", "bremse": "Notbremse", "zeit": "Zeit abgelaufen: verkaufen"}
@@ -208,10 +215,43 @@ def ideen_pruefen(alle, journal):
                    f"(≈ {zahl(e['netto'] * config.EINSATZ_EURO)} €)", True)
 
 
+def news_radar(alle):
+    """Allgemeine Marktnews plus reihum Nachrichten zu jedem Wert. Hält 48 Stunden vor."""
+    ablage = laden("news.json", {"stelle": 0, "liste": []})
+    symbole = list(alle)
+    start = ablage["stelle"] % len(symbole)
+    runde = (symbole[start:] + symbole[:start])[:config.NEWS_JE_DURCHLAUF]
+
+    def eins(symbol):
+        try:
+            name = config.AKTIEN[symbol]
+            return [{**n, "symbol": symbol, "name": name}
+                    for n in daten.nachrichten(symbol, name, stunden=24)[:4]]
+        except Exception as fehler:
+            print("Newsfehler", symbol, fehler)
+            return []
+
+    with ThreadPoolExecutor(5) as pool:
+        neu = [n for teil in pool.map(eins, runde) for n in teil]
+    try:
+        neu += daten.marktnachrichten(config.AKTIEN)
+    except Exception as fehler:
+        print("Marktnews-Fehler", fehler)
+    grenze = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    alles = {}
+    for n in neu + ablage["liste"]:
+        if n["zeit"] > grenze:
+            alles.setdefault(n["titel"], n)
+    liste = sorted(alles.values(), key=lambda n: n["zeit"], reverse=True)[:500]
+    speichern("news.json", {"stelle": start + len(runde), "liste": liste})
+    print(f"News: {len(neu)} geladen, {len(liste)} gespeichert")
+
+
 def stand_speichern(alle):
     """Momentaufnahme für das Dashboard."""
     kurse = {s: {"name": config.AKTIEN[s], "preis": preis, "waehrung": w,
-                 "verlauf": [[x["d"], round(x["c"], 2)] for x in tage[-90:]]}
+                 "krypto": s in config.KRYPTO,
+                 "verlauf": [[x["d"], float(f"{x['c']:.6g}")] for x in tage[-60:]]}
              for s, (tage, preis, w) in alle.items() if preis and tage}
     speichern("stand.json", {"zeit": datetime.now().isoformat(timespec="minutes"),
                              "usd": daten.dollar_in_euro(), "einsatz": config.EINSATZ_EURO,
@@ -239,11 +279,12 @@ def scan():
         speichern("gesehen.json", gesehen[-500:])
         woche = "{}-{}".format(*date.today().isocalendar()[:2])
         if journal and laden("woche.json", None) != woche:
-            senden("Wochen-Analyse", lernen.wochenbericht(journal, strategie.MUSTER))
+            senden("Wochen-Analyse", lernen.wochenbericht(journal, laden("modell.json", {"muster": {}})["muster"]))
             speichern("woche.json", woche)
     finally:
         speichern("journal.json", journal)
     stand_speichern(alle)
+    news_radar(alle)
     print("Fertig:", datetime.now().strftime("%d.%m. %H:%M"))
 
 
@@ -268,7 +309,7 @@ def bilanz():
     for i in journal:
         print(f"  {i['erstellt']} {i['firma']:<20} {i['status']:<14}"
               + (f"{i['netto']:+.2%}" if "netto" in i else ""))
-    print("\n" + lernen.wochenbericht(journal, strategie.MUSTER))
+    print("\n" + lernen.wochenbericht(journal, laden("modell.json", {"muster": {}})["muster"]))
     if fertig:
         treffer = sum(i["status"] == "ziel" for i in fertig) / len(fertig)
         summe = sum(i["netto"] for i in fertig) * config.EINSATZ_EURO

@@ -21,6 +21,21 @@ MUSTER = {
 KOSTEN = (2 * config.GEBUEHR_PRO_ORDER / config.EINSATZ_EURO) + config.SPREAD_PROZENT / 100
 
 
+KRYPTO_KOSTEN = (2 * config.GEBUEHR_PRO_ORDER / config.EINSATZ_EURO) + config.KRYPTO_SPREAD_PROZENT / 100
+VORSILBE = "Krypto: "
+
+
+def kosten(symbol):
+    return KRYPTO_KOSTEN if symbol in config.KRYPTO else KOSTEN
+
+
+def regel(name, symbol):
+    """Passende Regel, wenn das Muster zur Anlageklasse des Werts gehört, sonst None."""
+    if name.startswith(VORSILBE) != (symbol in config.KRYPTO):
+        return None
+    return MUSTER[name.removeprefix(VORSILBE)]
+
+
 def merkmale(tage):
     """Kennzahlen je Tag; None, solange zu wenig Vorgeschichte da ist."""
     c = [t["c"] for t in tage]
@@ -44,7 +59,7 @@ def merkmale(tage):
     return ergebnis
 
 
-def nachspielen(folgetage, kauf, ziel, bremse, dauer):
+def nachspielen(folgetage, kauf, ziel, bremse, dauer, gebuehren=KOSTEN):
     """Spielt einen Plan durch. Status: offen, nicht_gekauft, wartet, ziel, bremse, zeit."""
     if not folgetage:
         return {"status": "wartet"}
@@ -54,23 +69,23 @@ def nachspielen(folgetage, kauf, ziel, bremse, dauer):
     preis = min(erster["o"], kauf)
     for n, t in enumerate(folgetage[:dauer]):
         if n > 0 and t["o"] <= bremse:
-            return _ende("bremse", preis, t["o"], t["d"])
+            return _ende("bremse", preis, t["o"], t["d"], gebuehren)
         if n > 0 and t["o"] >= ziel:
-            return _ende("ziel", preis, t["o"], t["d"])
+            return _ende("ziel", preis, t["o"], t["d"], gebuehren)
         if t["l"] <= bremse:
-            return _ende("bremse", preis, bremse, t["d"])
+            return _ende("bremse", preis, bremse, t["d"], gebuehren)
         # Am Kauftag ist die Reihenfolge unbekannt: Ziel zählt nur bei Kauf zur Eröffnung.
         if t["h"] >= ziel and (n > 0 or erster["o"] <= kauf):
-            return _ende("ziel", preis, ziel, t["d"])
+            return _ende("ziel", preis, ziel, t["d"], gebuehren)
     if len(folgetage) >= dauer:
         t = folgetage[dauer - 1]
-        return _ende("zeit", preis, t["c"], t["d"])
+        return _ende("zeit", preis, t["c"], t["d"], gebuehren)
     return {"status": "offen", "kaufpreis": preis}
 
 
-def _ende(status, kauf, verkauf, datum):
+def _ende(status, kauf, verkauf, datum, gebuehren):
     return {"status": status, "kaufpreis": kauf, "verkauf": verkauf, "datum": datum,
-            "netto": verkauf / kauf - 1 - KOSTEN}
+            "netto": verkauf / kauf - 1 - gebuehren}
 
 
 def _auswerten(faelle):
@@ -88,6 +103,17 @@ def _auswerten(faelle):
 
 
 def lernen(alle_kurse):
+    """Aktien und Krypto verhalten sich verschieden und werden getrennt geprüft."""
+    aktien = {s: t for s, t in alle_kurse.items() if s not in config.KRYPTO}
+    krypto = {s: t for s, t in alle_kurse.items() if s in config.KRYPTO}
+    bericht = _lernen_gruppe(aktien, KOSTEN)
+    if krypto:
+        k = _lernen_gruppe(krypto, KRYPTO_KOSTEN)
+        bericht["muster"].update({VORSILBE + n: i for n, i in k["muster"].items()})
+    return bericht
+
+
+def _lernen_gruppe(alle_kurse, gebuehren):
     """Prüft jedes Muster: Plan auf alten Daten wählen, auf neueren Daten kontrollieren."""
     daten = sorted(t["d"] for tage in alle_kurse.values() for t in tage)
     trennung = daten[int(len(daten) * 0.65)]
@@ -107,7 +133,7 @@ def lernen(alle_kurse):
                 if not passend:
                     continue
                 e = nachspielen(tage[i + 1:i + 1 + dauer], m["c"], m["c"] + z * m["atr"],
-                                m["c"] - b * m["atr"], dauer)
+                                m["c"] - b * m["atr"], dauer, gebuehren)
                 if "netto" not in e:
                     continue
                 for n in passend:

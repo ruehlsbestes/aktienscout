@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 
+import config
+
 KOPF = {"User-Agent": "Mozilla/5.0"}
 
 
@@ -64,26 +66,71 @@ def _enthaelt(text, woerter):
     return any(f" {w} " in umgeben for w in woerter)
 
 
-def nachrichten(symbol, name, stunden=48):
-    """Neue Schlagzeilen mit einfacher Bewertung: +1 gut, -1 schlecht, 0 neutral."""
-    if symbol.endswith(".DE"):
-        suche = urllib.parse.quote(f'"{name}" Aktie when:2d')
-        url = f"https://news.google.com/rss/search?q={suche}&hl=de&gl=DE&ceid=DE:de"
-    else:
-        url = ("https://feeds.finance.yahoo.com/rss/2.0/headline?"
-               f"s={urllib.parse.quote(symbol)}&region=US&lang=en-US")
+def _norm(text):
+    return " " + " ".join("".join(z if z.isalnum() else " " for z in text.lower()).split()) + " "
+
+
+def _google(suche, sprache, stunden):
+    land = "hl=de&gl=DE&ceid=DE:de" if sprache == "de" else "hl=en-US&gl=US&ceid=US:en"
+    q = urllib.parse.quote(f"{suche} when:{max(1, stunden // 24)}d")
+    return f"https://news.google.com/rss/search?q={q}&{land}"
+
+
+def _feed(url, stunden):
     grenze = datetime.now(timezone.utc) - timedelta(hours=stunden)
-    treffer = []
-    for eintrag in ET.fromstring(_laden(url)).iter("item"):
+    for eintrag in ET.fromstring(_laden(url, 2)).iter("item"):
         titel = (eintrag.findtext("title") or "").strip()
         try:
             wann = parsedate_to_datetime(eintrag.findtext("pubDate"))
+            if wann < grenze:
+                continue
         except (TypeError, ValueError):
             continue
-        # Nur Schlagzeilen, in denen die Firma wirklich vorkommt.
-        if wann < grenze or name.split()[0].lower() not in titel.lower():
-            continue
+        link = eintrag.findtext("link") or ""
         wert = -1 if _enthaelt(titel, SCHLECHT) else 1 if _enthaelt(titel, GUT) else 0
-        treffer.append({"titel": titel, "link": eintrag.findtext("link") or "", "wert": wert,
-                        "zeit": wann.isoformat()})
-    return sorted(treffer, key=lambda n: n["zeit"], reverse=True)
+        yield {"titel": titel, "link": link if link.startswith("https://") else "", "wert": wert,
+               "zeit": wann.astimezone(timezone.utc).isoformat()}
+
+
+def _sammeln(urls, stunden):
+    """Mehrere Quellen zusammenführen; eine ausgefallene Quelle stört nicht."""
+    treffer, fehler = {}, []
+    for url in urls:
+        try:
+            for n in _feed(url, stunden):
+                treffer.setdefault(_norm(n["titel"]), n)
+        except Exception as f:
+            fehler.append(f)
+    if len(fehler) == len(urls):
+        raise fehler[0]
+    return sorted(treffer.values(), key=lambda n: n["zeit"], reverse=True)
+
+
+def nachrichten(symbol, name, stunden=48):
+    """Schlagzeilen zu einem Wert (deutsch und englisch): +1 gut, -1 schlecht, 0 neutral."""
+    krypto = symbol.endswith("-EUR")
+    name = config.SUCHNAMEN.get(symbol, name)
+    urls = [_google(f'"{name}" {"Kurs" if krypto else "Aktie"}', "de", stunden),
+            _google(f'"{name}" {"crypto" if krypto else "stock"}', "en", stunden)]
+    if "." not in symbol:
+        urls.append("https://feeds.finance.yahoo.com/rss/2.0/headline?"
+                    f"s={urllib.parse.quote(symbol.replace('-EUR', '-USD'))}&region=US&lang=en-US")
+    # Nur Schlagzeilen, in denen der Name wirklich als Wort vorkommt.
+    return [n for n in _sammeln(urls, stunden) if _norm(name) in _norm(n["titel"])]
+
+
+ALLGEMEIN = [("Börse Aktien", "de"), ("DAX heute", "de"), ("Quartalszahlen Prognose", "de"),
+             ("Gewinnwarnung", "de"), ("Übernahme Angebot Aktie", "de"), ("Kryptowährung Bitcoin", "de"),
+             ("stock market today", "en"), ("earnings guidance shares", "en"), ("analyst upgrade downgrade", "en"),
+             ("merger acquisition deal shares", "en"), ("crypto market", "en"), ("Federal Reserve ECB interest rates", "en")]
+
+
+def marktnachrichten(werte, stunden=24):
+    """Breite Suche über allgemeine Markt-Themen, Schlagzeilen den Werten zuordnen."""
+    namen = [(s, n, _norm(config.SUCHNAMEN.get(s, n))) for s, n in werte.items()]
+    ergebnis = []
+    for n in _sammeln([_google(q, sprache, stunden) for q, sprache in ALLGEMEIN], stunden):
+        titel = _norm(n["titel"])
+        passend = next(((s, name) for s, name, such in namen if such in titel), (None, None))
+        ergebnis.append({**n, "symbol": passend[0], "name": passend[1]})
+    return ergebnis

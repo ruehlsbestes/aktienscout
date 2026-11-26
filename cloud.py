@@ -13,7 +13,7 @@ import web
 HIER = Path(__file__).resolve().parent
 ZUSTAND = HIER / "zustand.enc"
 SEITE = HIER / "site"
-DATEIEN = ["journal.json", "gesehen.json", "woche.json", "modell.json"]
+DATEIEN = ["journal.json", "gesehen.json", "woche.json", "modell.json", "news.json"]
 
 
 def openssl(daten, entschluesseln=False):

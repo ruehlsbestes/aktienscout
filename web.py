@@ -14,7 +14,6 @@ from pathlib import Path
 
 import lernen
 import scout
-import strategie
 
 PORT = 8766
 SEITE = Path(__file__).resolve().parent / "dashboard.html"
@@ -55,7 +54,8 @@ def dashboard_daten():
         "journal": journal,
         "modell": scout.laden("modell.json", None),
         "lernen": {n: {**lernen.eigene_bilanz(journal, n), "pausiert": lernen.pausiert(journal, n)}
-                   for n in strategie.MUSTER},
+                   for n in (scout.laden("modell.json", None) or {"muster": {}})["muster"]},
+        "news": scout.laden("news.json", {"liste": []})["liste"][:250],
     }
 
 
