@@ -4,6 +4,11 @@ on:
     # Werktags etwa alle 15 Minuten, Zeiten in UTC
     - cron: "7,22,37,52 6-21 * * 1-5"
   workflow_dispatch:
+    inputs:
+      test:
+        description: Testnachricht aufs Handy
+        type: boolean
+        default: false
 permissions:
   contents: write
   pages: write
@@ -21,6 +26,11 @@ jobs:
       TZ: Europe/Berlin
     steps:
       - uses: actions/checkout@v7
+      - name: Testnachricht
+        if: inputs.test
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 scout.py test >/dev/null
       - name: Letzten Stand holen
         run: |
           code=0
